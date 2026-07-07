@@ -769,6 +769,11 @@ SCRAPERS = {
     "apexsystems": make_smartrecruiters_scraper("ApexSystems3", "apexsystems"),
     "roberthalf": scrape_roberthalf,
     "motionrecruitment": scrape_motionrecruitment,
+    "mastechdigital": make_smartrecruiters_scraper("MastechDigital", "mastechdigital"),
+    "eliassengroup": make_smartrecruiters_scraper("EliassenGroup1", "eliassengroup"),
+    "askstaffing": make_smartrecruiters_scraper("ASKStaffing1", "askstaffing"),
+    "diverselynx": make_smartrecruiters_scraper("DiverseLynx3", "diverselynx"),
+    "aditiconsulting": make_smartrecruiters_scraper("AditiConsulting1", "aditiconsulting"),
 }
 
 
