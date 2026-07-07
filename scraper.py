@@ -89,7 +89,10 @@ def score_job(title, extra_text=""):
     score = 0
     matched = []
     for kw, weight in KEYWORDS.items():
-        if kw in text:
+        # Word-boundary match so short keywords like "rag" or "llm" don't
+        # false-positive inside unrelated words ("storage", "snapdragon").
+        pattern = r"(?<![a-z0-9])" + re.escape(kw) + r"(?![a-z0-9])"
+        if re.search(pattern, text):
             score += weight
             if weight > 0:
                 matched.append(kw)
@@ -184,16 +187,54 @@ def scrape_nvoids():
     return out
 
 
+# Only alert/log postings at least this fresh. OnlyC2C's homepage mixes
+# brand-new listings with ones from many months ago (not chronological),
+# so without this filter every old posting looks "new" on first run.
+MAX_POSTING_AGE_DAYS = 3
+
+
+def _parse_relative_age_days(posted_text):
+    """
+    Turns strings like '36 minutes ago', '11 months ago', '2 days ago',
+    or an absolute date like '10/9/2024' into an approximate age in days.
+    Returns None if it can't be parsed (caller should then treat cautiously).
+    """
+    if not posted_text:
+        return None
+    posted_text = posted_text.strip().lower()
+
+    m = re.match(r"(\d+)\s+(minute|hour|day|week|month|year)s?\s+ago", posted_text)
+    if m:
+        n, unit = int(m.group(1)), m.group(2)
+        unit_days = {
+            "minute": 1 / 1440, "hour": 1 / 24, "day": 1,
+            "week": 7, "month": 30, "year": 365,
+        }
+        return n * unit_days[unit]
+
+    m = re.match(r"(\d{1,2})/(\d{1,2})/(\d{4})", posted_text)
+    if m:
+        try:
+            posted_date = datetime(int(m.group(3)), int(m.group(1)), int(m.group(2)),
+                                    tzinfo=timezone.utc)
+            return (datetime.now(timezone.utc) - posted_date).days
+        except ValueError:
+            return None
+
+    return None
+
+
 def scrape_onlyc2c():
     """
-    onlyc2c.com — card-based listing on the homepage.
-    NOTE: this site mixes recently-posted jobs with much older ones on the
-    same page (not strictly chronological), so we rely entirely on the
-    seen_ids tracker rather than position/order. The exact CSS classes could
-    not be inspected directly (sandbox has no live access to this domain),
-    so this parser uses a best-effort structural heuristic. If it comes back
-    with zero/garbled results on first real run, send back the HTML
-    (view-source) for one listing card and it'll be corrected quickly.
+    onlyc2c.com — card-based listing on the homepage, mixing fresh and very
+    old postings on the same page (not chronological).
+
+    Each job has a real, unique permalink like:
+        https://onlyc2c.com/c2c-jobid-C2C-41
+    We key entirely off that job id (reliable dedup, unlike raw text hashing)
+    and skip anything whose "Posted X ago" text is older than
+    MAX_POSTING_AGE_DAYS, since old postings aren't useful for real-time
+    alerting and previously showed up as false "new" jobs on first run.
     """
     url = "https://onlyc2c.com"
     out = []
@@ -206,41 +247,55 @@ def scrape_onlyc2c():
 
     soup = BeautifulSoup(resp.text, "html.parser")
 
-    # Heuristic: look for "Apply Now" links/buttons, which appear once per
-    # job card on this site, and walk up to the enclosing card container.
-    apply_links = soup.find_all(string=re.compile(r"Apply Now", re.I))
-    seen_cards = set()
-    for node in apply_links:
-        card = node.find_parent(["div", "li", "article"])
-        # Walk up a couple levels to get the full card if needed
+    id_pattern = re.compile(r"c2c-jobid-(C2C-\d+)", re.I)
+    seen_ids_this_page = set()
+
+    for a in soup.find_all("a", href=id_pattern):
+        m = id_pattern.search(a["href"])
+        if not m:
+            continue
+        job_id = "onlyc2c_" + m.group(1)
+        if job_id in seen_ids_this_page:
+            continue  # same job card matched at more than one DOM level
+        seen_ids_this_page.add(job_id)
+
+        link = a["href"]
+        if link.startswith("/"):
+            link = "https://onlyc2c.com" + link
+
+        card = a.find_parent(["div", "li", "article"]) or a
         hops = 0
         while card and hops < 3 and len(card.get_text(strip=True)) < 40:
             card = card.find_parent(["div", "li", "article"])
             hops += 1
-        if not card:
-            continue
-        card_id = id(card)
-        if card_id in seen_cards:
-            continue
-        seen_cards.add(card_id)
+        full_text = card.get_text(" ", strip=True) if card else a.get_text(" ", strip=True)
 
-        text = card.get_text(" ", strip=True)
-        link_tag = card.find("a", href=True)
-        link = link_tag["href"] if link_tag else url
-        if link.startswith("/"):
-            link = "https://onlyc2c.com" + link
+        posted_match = re.search(
+            r"posted\s+(\d+\s+\w+\s+ago|\d{1,2}/\d{1,2}/\d{4})",
+            full_text, re.I,
+        )
+        posted_text = posted_match.group(1) if posted_match else ""
+        age_days = _parse_relative_age_days(posted_text)
 
-        # Use a hash of the text as a stable-ish dedup id since this site
-        # doesn't expose clean numeric job ids in the extracted text.
-        import hashlib
-        job_id = "onlyc2c_" + hashlib.md5(text.encode("utf-8")).hexdigest()[:12]
+        # Skip anything clearly older than the freshness window. If we
+        # couldn't parse an age at all, keep it (better to log an
+        # unfiltered item than silently drop a real new posting).
+        if age_days is not None and age_days > MAX_POSTING_AGE_DAYS:
+            continue
+
+        # Title = everything before the "Posted ..." marker, which keeps
+        # out the applicant-count/tag noise that follows it.
+        if posted_match:
+            title = full_text[:posted_match.start()].strip()
+        else:
+            title = full_text[:180].strip()
 
         out.append({
             "id": job_id,
-            "title": text[:180],  # full card text as a fallback "title"
+            "title": title,
             "company_or_location": "",
             "link": link,
-            "posted": "",
+            "posted": posted_text,
         })
     return out
 
