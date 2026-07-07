@@ -452,10 +452,146 @@ def scrape_recruut():
     return out
 
 
+def scrape_techfetch():
+    """
+    techfetch.com — C2C requirements page, clean HTML table:
+    Date | Job Title | Skill Set | Location. Job detail links contain a
+    unique job id suffix like '...-j3632469', which we use as the key.
+    No login required to view this listing page.
+    """
+    url = "https://www.techfetch.com/it-jobs/corp-corp-requirements.html"
+    out = []
+    try:
+        resp = requests.get(url, headers=HEADERS, timeout=20)
+        resp.raise_for_status()
+    except Exception as e:
+        print(f"[error] techfetch fetch failed: {e}")
+        return out
+
+    soup = BeautifulSoup(resp.text, "html.parser")
+    job_link_pattern = re.compile(r"/job-description/[a-z0-9\-]+-j(\d+)", re.I)
+
+    seen_ids_this_page = set()
+    for a in soup.find_all("a", href=job_link_pattern):
+        m = job_link_pattern.search(a["href"])
+        if not m:
+            continue
+        job_id = "techfetch_" + m.group(1)
+        if job_id in seen_ids_this_page:
+            continue
+        seen_ids_this_page.add(job_id)
+
+        title = a.get_text(strip=True)
+        if not title:
+            continue
+
+        link = a["href"].split("&")[0]  # strip tracking params, keep clean URL
+        if link.startswith("/"):
+            link = "https://www.techfetch.com" + link
+
+        # Row structure: Date | Job Title (this link) | Skill Set | Location
+        location, posted = "", ""
+        row = a.find_parent("tr")
+        if row:
+            cells = row.find_all("td")
+            texts = [c.get_text(strip=True) for c in cells]
+            if len(texts) >= 4:
+                posted, location = texts[0], texts[-1]
+
+        age_days = _parse_relative_age_days(posted) if posted else None
+        # techfetch dates are like "Jul-06-26" — try that format too
+        if age_days is None and posted:
+            try:
+                posted_date = datetime.strptime(posted, "%b-%d-%y").replace(tzinfo=timezone.utc)
+                age_days = (datetime.now(timezone.utc) - posted_date).days
+            except ValueError:
+                pass
+        if age_days is not None and age_days > MAX_POSTING_AGE_DAYS:
+            continue
+
+        out.append({
+            "id": job_id,
+            "title": title,
+            "company_or_location": location,
+            "link": link,
+            "posted": posted,
+        })
+    return out
+
+
+def scrape_benchzero():
+    """
+    benchzero.com — homepage 'Latest Jobs' section. Real per-job detail
+    links via the 'View Details' anchor: /index/jobdetails/{id}/{slug}
+    (the 'Apply Now' / title links incorrectly point to /login for
+    logged-out visitors — View Details is the one that actually works).
+    """
+    url = "https://www.benchzero.com"
+    out = []
+    try:
+        resp = requests.get(url, headers=HEADERS, timeout=20)
+        resp.raise_for_status()
+    except Exception as e:
+        print(f"[error] benchzero fetch failed: {e}")
+        return out
+
+    soup = BeautifulSoup(resp.text, "html.parser")
+    job_link_pattern = re.compile(r"/index/jobdetails/(\d+)/", re.I)
+
+    seen_ids_this_page = set()
+    for a in soup.find_all("a", href=job_link_pattern):
+        m = job_link_pattern.search(a["href"])
+        if not m:
+            continue
+        job_id = "benchzero_" + m.group(1)
+        if job_id in seen_ids_this_page:
+            continue
+        seen_ids_this_page.add(job_id)
+
+        link = a["href"]
+        if link.startswith("/"):
+            link = "https://www.benchzero.com" + link
+
+        # Title is the slug-derived text in the link, or nearby heading text
+        title = a.get_text(strip=True) or link.split("/")[-1].replace("-", " ")
+
+        posted = ""
+        card = a.find_parent(["div", "li", "article"])
+        hops = 0
+        while card and hops < 3 and len(card.get_text(strip=True)) < 40:
+            card = card.find_parent(["div", "li", "article"])
+            hops += 1
+        if card:
+            date_match = re.search(r"Posted Date\s+(\d{2}-\d{2}-\d{4})", card.get_text(" ", strip=True))
+            if date_match:
+                posted = date_match.group(1)
+
+        age_days = None
+        if posted:
+            try:
+                posted_date = datetime.strptime(posted, "%m-%d-%Y").replace(tzinfo=timezone.utc)
+                age_days = (datetime.now(timezone.utc) - posted_date).days
+            except ValueError:
+                pass
+        if age_days is not None and age_days > MAX_POSTING_AGE_DAYS:
+            continue
+
+        out.append({
+            "id": job_id,
+            "title": title,
+            "company_or_location": "",
+            "link": link,
+            "posted": posted,
+        })
+    return out
+
+
 SCRAPERS = {
     "nvoids": scrape_nvoids,
     "onlyc2c": scrape_onlyc2c,
     "recruut": scrape_recruut,
+    "techfetch": scrape_techfetch,
+    "benchzero": scrape_benchzero,
 }
 
 
