@@ -99,13 +99,60 @@ def score_job(title, extra_text=""):
     return score, matched
 
 
+EMAIL_PATTERN = re.compile(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}")
+
+# Matches common US phone formats: (123) 456-7890, 123-456-7890,
+# 123.456.7890, +1 123 456 7890, etc.
+PHONE_PATTERN = re.compile(
+    r"(?:\+?1[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}"
+)
+
+# Emails on these domains belong to the portal itself (support/contact
+# addresses), not the recruiter who posted the job — always exclude them.
+SITE_OWNED_EMAIL_DOMAINS = {"nvoids.com", "onlyc2c.com"}
+
+
+def extract_recruiter_contacts(detail_url):
+    """
+    Fetches a job's own detail page and pulls out any recruiter email/phone
+    mentioned in the posting body. Returns (email, phone) — either may be
+    an empty string if nothing was found or the page couldn't be fetched.
+    Only called for jobs that already passed the relevance threshold, to
+    keep the extra request volume reasonable.
+    """
+    try:
+        resp = requests.get(detail_url, headers=HEADERS, timeout=15)
+        resp.raise_for_status()
+    except Exception as e:
+        print(f"[warn] could not fetch detail page for contacts: {e}")
+        return "", ""
+
+    soup = BeautifulSoup(resp.text, "html.parser")
+    text = soup.get_text(" ", strip=True)
+
+    emails = EMAIL_PATTERN.findall(text)
+    emails = [
+        e for e in dict.fromkeys(emails)  # dedup, keep order
+        if e.split("@")[-1].lower() not in SITE_OWNED_EMAIL_DOMAINS
+    ]
+
+    phones = PHONE_PATTERN.findall(text)
+    phones = list(dict.fromkeys(phones))  # dedup, keep order
+
+    return (
+        "; ".join(emails[:2]),   # cap at 2 in case a posting lists a few
+        "; ".join(phones[:2]),
+    )
+
+
 def append_to_csv(rows):
     file_exists = os.path.exists(CSV_PATH)
     with open(CSV_PATH, "a", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(
             f,
-            fieldnames=["source", "title", "company_or_location", "link",
-                        "posted", "score", "matched_keywords", "found_at"],
+            fieldnames=["source", "title", "company_or_location", "job_url",
+                        "posted", "score", "matched_keywords",
+                        "recruiter_email", "recruiter_phone", "found_at"],
         )
         if not file_exists:
             writer.writeheader()
@@ -331,14 +378,19 @@ def main():
             if score < MIN_SCORE_TO_LOG:
                 continue  # not relevant enough to log at all
 
+            # Only worth the extra request for jobs we're actually keeping.
+            recruiter_email, recruiter_phone = extract_recruiter_contacts(job["link"])
+
             row = {
                 "source": source_name,
                 "title": job["title"],
                 "company_or_location": job.get("company_or_location", ""),
-                "link": job["link"],
+                "job_url": job["link"],
                 "posted": job.get("posted", ""),
                 "score": score,
                 "matched_keywords": ", ".join(matched),
+                "recruiter_email": recruiter_email,
+                "recruiter_phone": recruiter_phone,
                 "found_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
             }
             new_csv_rows.append(row)
@@ -350,6 +402,10 @@ def main():
                     f"{job.get('company_or_location', '')}\n"
                     f"{job['link']}"
                 )
+                if recruiter_email:
+                    msg += f"\n📧 {recruiter_email}"
+                if recruiter_phone:
+                    msg += f"\n📞 {recruiter_phone}"
                 send_telegram(msg)
                 alerts_sent += 1
                 time.sleep(1)  # be gentle with Telegram's rate limits
