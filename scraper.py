@@ -715,6 +715,50 @@ def scrape_roberthalf():
     return out
 
 
+def scrape_motionrecruitment():
+    """
+    motionrecruitment.com — fully server-rendered job board (Next.js SSR),
+    no JS needed. Job links end in a numeric id:
+        /tech-jobs/{location}/{contract|direct-hire}/{title-slug}/{id}
+    """
+    url = "https://motionrecruitment.com/tech-jobs"
+    out = []
+    try:
+        resp = requests.get(url, headers=HEADERS, timeout=20)
+        resp.raise_for_status()
+    except Exception as e:
+        print(f"[error] motionrecruitment fetch failed: {e}")
+        return out
+
+    soup = BeautifulSoup(resp.text, "html.parser")
+    job_link_pattern = re.compile(
+        r"https://motionrecruitment\.com/tech-jobs/[\w\-]+/[\w\-]+/[\w\-]+/(\d+)"
+    )
+
+    seen_ids_this_page = set()
+    for a in soup.find_all("a", href=job_link_pattern):
+        m = job_link_pattern.search(a["href"])
+        if not m:
+            continue
+        job_id = "motionrecruitment_" + m.group(1)
+        if job_id in seen_ids_this_page:
+            continue
+        seen_ids_this_page.add(job_id)
+
+        full_text = a.get_text(" ", strip=True)
+        if not full_text:
+            continue
+
+        out.append({
+            "id": job_id,
+            "title": full_text[:200],  # combined title+location+snippet; reliable over clever splitting
+            "company_or_location": "",
+            "link": a["href"],
+            "posted": "",  # not exposed on the listing page itself
+        })
+    return out
+
+
 SCRAPERS = {
     "nvoids": scrape_nvoids,
     "onlyc2c": scrape_onlyc2c,
@@ -724,6 +768,7 @@ SCRAPERS = {
     "collabera": make_smartrecruiters_scraper("Collabera2", "collabera"),
     "apexsystems": make_smartrecruiters_scraper("ApexSystems3", "apexsystems"),
     "roberthalf": scrape_roberthalf,
+    "motionrecruitment": scrape_motionrecruitment,
 }
 
 
