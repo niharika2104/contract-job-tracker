@@ -586,12 +586,144 @@ def scrape_benchzero():
     return out
 
 
+def make_smartrecruiters_scraper(company_slug, source_name):
+    """
+    Factory that builds a scraper for any company hosted on SmartRecruiters
+    (careers.smartrecruiters.com/{slug}) — a shared ATS platform. The page
+    is plain server-rendered HTML: jobs listed by location with clean
+    permalinks like jobs.smartrecruiters.com/{slug}/{id}-{job-title-slug}.
+    One factory function here covers every company on this platform —
+    add a new company by adding one line where SCRAPERS is built, no new
+    parsing logic needed.
+    """
+    def scraper():
+        url = f"https://careers.smartrecruiters.com/{company_slug}"
+        out = []
+        try:
+            resp = requests.get(url, headers=HEADERS, timeout=20)
+            resp.raise_for_status()
+        except Exception as e:
+            print(f"[error] {source_name} (SmartRecruiters) fetch failed: {e}")
+            return out
+
+        soup = BeautifulSoup(resp.text, "html.parser")
+        job_link_pattern = re.compile(
+            r"https://jobs\.smartrecruiters\.com/" + re.escape(company_slug) + r"/([\w\-]+)"
+        )
+
+        seen_ids_this_page = set()
+        for a in soup.find_all("a", href=job_link_pattern):
+            m = job_link_pattern.search(a["href"])
+            if not m:
+                continue
+            job_id = f"{source_name}_" + m.group(1)
+            if job_id in seen_ids_this_page:
+                continue
+            seen_ids_this_page.add(job_id)
+
+            title = a.get_text(strip=True)
+            if not title:
+                continue
+
+            # Location is the nearest preceding "### City, State" heading
+            location = ""
+            heading = a.find_previous(["h3", "h4"])
+            if heading:
+                location = heading.get_text(strip=True)
+
+            out.append({
+                "id": job_id,
+                "title": title,
+                "company_or_location": location,
+                "link": a["href"],
+                "posted": "",  # SmartRecruiters listing page doesn't expose dates here
+            })
+        return out
+    return scraper
+
+
+def scrape_roberthalf():
+    """
+    roberthalf.com — category-based job listing pages are fully
+    server-rendered HTML (no JS needed), with complete data: title,
+    location, work type, salary, full description, and an ISO posted
+    timestamp. We hit a handful of relevant category pages directly
+    rather than the generic search (which paginates differently).
+    """
+    categories = ["data-scientist", "data-engineer", "machine-learning-engineer",
+                  "ai-engineer", "data-analyst"]
+    out = []
+    job_link_pattern = re.compile(r"https://www\.roberthalf\.com/us/en/job/[\w\-/]+")
+
+    for category in categories:
+        url = f"https://www.roberthalf.com/us/en/jobs/all/{category}"
+        try:
+            resp = requests.get(url, headers=HEADERS, timeout=20)
+            resp.raise_for_status()
+        except Exception as e:
+            print(f"[error] roberthalf ({category}) fetch failed: {e}")
+            continue
+
+        soup = BeautifulSoup(resp.text, "html.parser")
+        for a in soup.find_all("a", href=job_link_pattern):
+            link = a["href"]
+            # Job id is the last path segment, e.g. 02220-0013436476-usen
+            job_id_match = re.search(r"/([\w\-]+)$", link.rstrip("/"))
+            if not job_id_match:
+                continue
+            job_id = "roberthalf_" + job_id_match.group(1)
+
+            title = a.get_text(strip=True)
+            if not title:
+                continue
+
+            # Description/location/date sit in the following sibling content
+            # within the same list item.
+            location, posted = "", ""
+            container = a.find_parent(["div", "li"])
+            hops = 0
+            while container and hops < 3 and len(container.get_text(strip=True)) < 60:
+                container = container.find_parent(["div", "li"])
+                hops += 1
+            if container:
+                text = container.get_text(" ", strip=True)
+                date_match = re.search(r"(\d{4}-\d{2}-\d{2})T", text)
+                if date_match:
+                    posted = date_match.group(1)
+                # Location is usually the first "City, ST" pattern in the block
+                loc_match = re.search(r"([A-Za-z .]+,\s*[A-Z]{2})\b", text)
+                if loc_match:
+                    location = loc_match.group(1)
+
+            age_days = None
+            if posted:
+                try:
+                    posted_date = datetime.strptime(posted, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+                    age_days = (datetime.now(timezone.utc) - posted_date).days
+                except ValueError:
+                    pass
+            if age_days is not None and age_days > MAX_POSTING_AGE_DAYS:
+                continue
+
+            out.append({
+                "id": job_id,
+                "title": title,
+                "company_or_location": location,
+                "link": link,
+                "posted": posted,
+            })
+    return out
+
+
 SCRAPERS = {
     "nvoids": scrape_nvoids,
     "onlyc2c": scrape_onlyc2c,
     "recruut": scrape_recruut,
     "techfetch": scrape_techfetch,
     "benchzero": scrape_benchzero,
+    "collabera": make_smartrecruiters_scraper("Collabera2", "collabera"),
+    "apexsystems": make_smartrecruiters_scraper("ApexSystems3", "apexsystems"),
+    "roberthalf": scrape_roberthalf,
 }
 
 
