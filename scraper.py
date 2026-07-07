@@ -112,6 +112,22 @@ PHONE_PATTERN = re.compile(
 SITE_OWNED_EMAIL_DOMAINS = {"nvoids.com", "onlyc2c.com"}
 
 
+def _decode_cfemail(hex_string):
+    """
+    Decodes Cloudflare's email-obfuscation encoding (used by many WordPress
+    sites, including Recruut) back into a real email address. The encoding
+    XORs each byte against a key stored as the first byte.
+    """
+    try:
+        key = int(hex_string[:2], 16)
+        return "".join(
+            chr(int(hex_string[i:i + 2], 16) ^ key)
+            for i in range(2, len(hex_string), 2)
+        )
+    except (ValueError, IndexError):
+        return None
+
+
 def extract_recruiter_contacts(detail_url):
     """
     Fetches a job's own detail page and pulls out any recruiter email/phone
@@ -128,9 +144,17 @@ def extract_recruiter_contacts(detail_url):
         return "", ""
 
     soup = BeautifulSoup(resp.text, "html.parser")
-    text = soup.get_text(" ", strip=True)
 
-    emails = EMAIL_PATTERN.findall(text)
+    emails = []
+    # Cloudflare-obfuscated emails (common on WordPress sites like Recruut) —
+    # these show up as data-cfemail attributes rather than plain text.
+    for tag in soup.find_all(attrs={"data-cfemail": True}):
+        decoded = _decode_cfemail(tag["data-cfemail"])
+        if decoded:
+            emails.append(decoded)
+
+    text = soup.get_text(" ", strip=True)
+    emails += EMAIL_PATTERN.findall(text)
     emails = [
         e for e in dict.fromkeys(emails)  # dedup, keep order
         if e.split("@")[-1].lower() not in SITE_OWNED_EMAIL_DOMAINS
@@ -268,6 +292,20 @@ def _parse_relative_age_days(posted_text):
         except ValueError:
             return None
 
+    m = re.match(
+        r"(january|february|march|april|may|june|july|august|"
+        r"september|october|november|december)\s+(\d{1,2}),?\s+(\d{4})",
+        posted_text,
+    )
+    if m:
+        try:
+            posted_date = datetime.strptime(
+                f"{m.group(1)} {m.group(2)} {m.group(3)}", "%B %d %Y"
+            ).replace(tzinfo=timezone.utc)
+            return (datetime.now(timezone.utc) - posted_date).days
+        except ValueError:
+            return None
+
     return None
 
 
@@ -347,9 +385,77 @@ def scrape_onlyc2c():
     return out
 
 
+def scrape_recruut():
+    """
+    recruut.com — WordPress-based C2C job board. Homepage lists recent jobs
+    as cards, each with a real permalink like:
+        https://www.recruut.com/job/some-job-title-slug/
+    We use the URL slug itself as the unique id (stable, human-readable).
+
+    NOTE: this parser is a best-effort heuristic built from the rendered
+    page content (my sandbox can't verify raw HTML class names on this
+    domain directly). If it returns 0 results or garbled titles on the
+    first real run, that's expected-possible and a quick fix — send back
+    the log output.
+    """
+    url = "https://www.recruut.com"
+    out = []
+    try:
+        resp = requests.get(url, headers=HEADERS, timeout=20)
+        resp.raise_for_status()
+    except Exception as e:
+        print(f"[error] recruut fetch failed: {e}")
+        return out
+
+    soup = BeautifulSoup(resp.text, "html.parser")
+    job_link_pattern = re.compile(r"^https://www\.recruut\.com/job/[a-z0-9\-]+/?$", re.I)
+
+    seen_slugs = set()
+    for a in soup.find_all("a", href=job_link_pattern):
+        href = a["href"].rstrip("/")
+        slug = href.split("/job/")[-1]
+        if slug in seen_slugs:
+            continue
+        seen_slugs.add(slug)
+
+        title = a.get_text(strip=True)
+        if not title:
+            continue  # some duplicate <a> wrappers (e.g. image links) have no text
+
+        # The posting date usually appears near the card as "Month DD, YYYY"
+        posted = ""
+        card = a.find_parent(["article", "div"])
+        hops = 0
+        while card and hops < 4 and len(card.get_text(strip=True)) < 60:
+            card = card.find_parent(["article", "div"])
+            hops += 1
+        if card:
+            date_match = re.search(
+                r"(January|February|March|April|May|June|July|August|"
+                r"September|October|November|December)\s+\d{1,2},\s+\d{4}",
+                card.get_text(" ", strip=True),
+            )
+            if date_match:
+                posted = date_match.group(0)
+
+        age_days = _parse_relative_age_days(posted)
+        if age_days is not None and age_days > MAX_POSTING_AGE_DAYS:
+            continue
+
+        out.append({
+            "id": "recruut_" + slug,
+            "title": title,
+            "company_or_location": "",
+            "link": href,
+            "posted": posted,
+        })
+    return out
+
+
 SCRAPERS = {
     "nvoids": scrape_nvoids,
     "onlyc2c": scrape_onlyc2c,
+    "recruut": scrape_recruut,
 }
 
 
