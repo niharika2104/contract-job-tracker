@@ -210,7 +210,7 @@ def send_telegram(message):
 # Each returns a list of dicts: {id, title, company_or_location, link, posted}
 # ---------------------------------------------------------------------------
 
-def scrape_nvoids():
+def scrape_nvoids(seen_ids=None):
     """
     nvoids.com — plain HTML table: Job Title | Location | Time
     Job detail links look like: /job_details.jsp?id=XXXXXXX&uid=...
@@ -309,7 +309,7 @@ def _parse_relative_age_days(posted_text):
     return None
 
 
-def scrape_onlyc2c():
+def scrape_onlyc2c(seen_ids=None):
     """
     onlyc2c.com — card-based listing on the homepage, mixing fresh and very
     old postings on the same page (not chronological).
@@ -385,7 +385,7 @@ def scrape_onlyc2c():
     return out
 
 
-def scrape_recruut():
+def scrape_recruut(seen_ids=None):
     """
     recruut.com — WordPress-based C2C job board. Homepage lists recent jobs
     as cards, each with a real permalink like:
@@ -452,7 +452,7 @@ def scrape_recruut():
     return out
 
 
-def scrape_techfetch():
+def scrape_techfetch(seen_ids=None):
     """
     techfetch.com — C2C requirements page, clean HTML table:
     Date | Job Title | Skill Set | Location. Job detail links contain a
@@ -519,7 +519,7 @@ def scrape_techfetch():
     return out
 
 
-def scrape_benchzero():
+def scrape_benchzero(seen_ids=None):
     """
     benchzero.com — homepage 'Latest Jobs' section. Real per-job detail
     links via the 'View Details' anchor: /index/jobdetails/{id}/{slug}
@@ -595,8 +595,17 @@ def make_smartrecruiters_scraper(company_slug, source_name):
     One factory function here covers every company on this platform —
     add a new company by adding one line where SCRAPERS is built, no new
     parsing logic needed.
+
+    IMPORTANT: the listing page only exposes a bare job title, no
+    description or skills — a role titled generically (e.g. "Senior
+    Consultant") that's actually GenAI-focused would never score if we only
+    looked at the title. So for any job not already in seen_ids, we fetch
+    its own detail page once to get full text for scoring. This only
+    happens for genuinely new postings (typically 0-3 per run once caught
+    up), not the whole listing every time, to keep request volume sane.
     """
-    def scraper():
+    def scraper(seen_ids=None):
+        seen_ids = seen_ids or set()
         url = f"https://careers.smartrecruiters.com/{company_slug}"
         out = []
         try:
@@ -631,18 +640,31 @@ def make_smartrecruiters_scraper(company_slug, source_name):
             if heading:
                 location = heading.get_text(strip=True)
 
+            description = ""
+            if job_id not in seen_ids:
+                # Genuinely new — worth the extra request to get full text
+                # for scoring, since the listing page alone isn't enough.
+                try:
+                    detail_resp = requests.get(a["href"], headers=HEADERS, timeout=15)
+                    detail_resp.raise_for_status()
+                    detail_soup = BeautifulSoup(detail_resp.text, "html.parser")
+                    description = detail_soup.get_text(" ", strip=True)[:3000]
+                except Exception as e:
+                    print(f"[warn] {source_name}: couldn't fetch detail page for {job_id}: {e}")
+
             out.append({
                 "id": job_id,
                 "title": title,
                 "company_or_location": location,
                 "link": a["href"],
                 "posted": "",  # SmartRecruiters listing page doesn't expose dates here
+                "description": description,
             })
         return out
     return scraper
 
 
-def scrape_roberthalf():
+def scrape_roberthalf(seen_ids=None):
     """
     roberthalf.com — category-based job listing pages are fully
     server-rendered HTML (no JS needed), with complete data: title,
@@ -665,7 +687,11 @@ def scrape_roberthalf():
             continue
 
         soup = BeautifulSoup(resp.text, "html.parser")
-        for a in soup.find_all("a", href=job_link_pattern):
+        matches_on_page = soup.find_all("a", href=job_link_pattern)
+        print(f"[debug] roberthalf ({category}): HTTP {resp.status_code}, "
+              f"{len(resp.text)} bytes, {len(matches_on_page)} link matches, "
+              f"title={soup.title.string if soup.title else 'none'!r}")
+        for a in matches_on_page:
             link = a["href"]
             # Job id is the last path segment, e.g. 02220-0013436476-usen
             job_id_match = re.search(r"/([\w\-]+)$", link.rstrip("/"))
@@ -715,7 +741,7 @@ def scrape_roberthalf():
     return out
 
 
-def scrape_motionrecruitment():
+def scrape_motionrecruitment(seen_ids=None):
     """
     motionrecruitment.com — fully server-rendered job board (Next.js SSR),
     no JS needed. Job links end in a numeric id:
@@ -734,9 +760,13 @@ def scrape_motionrecruitment():
     job_link_pattern = re.compile(
         r"https://motionrecruitment\.com/tech-jobs/[\w\-]+/[\w\-]+/[\w\-]+/(\d+)"
     )
+    matches_on_page = soup.find_all("a", href=job_link_pattern)
+    print(f"[debug] motionrecruitment: HTTP {resp.status_code}, "
+          f"{len(resp.text)} bytes, {len(matches_on_page)} link matches, "
+          f"title={soup.title.string if soup.title else 'none'!r}")
 
     seen_ids_this_page = set()
-    for a in soup.find_all("a", href=job_link_pattern):
+    for a in matches_on_page:
         m = job_link_pattern.search(a["href"])
         if not m:
             continue
@@ -790,7 +820,7 @@ def main():
 
     for source_name, scraper_fn in SCRAPERS.items():
         print(f"[info] scraping {source_name}...")
-        jobs = scraper_fn()
+        jobs = scraper_fn(seen)
         print(f"[info] {source_name}: found {len(jobs)} listings on page")
 
         for job in jobs:
@@ -798,7 +828,13 @@ def main():
                 continue  # already processed in a previous run
             new_seen.add(job["id"])
 
-            score, matched = score_job(job["title"], job.get("company_or_location", ""))
+            # Score against title + location, plus full description text when
+            # the scraper was able to fetch it (needed for sites like
+            # SmartRecruiters where the listing page only shows a bare title —
+            # scoring title-only there would miss roles where the GenAI/ML
+            # detail only appears in the full posting).
+            score_text = job.get("company_or_location", "") + " " + job.get("description", "")
+            score, matched = score_job(job["title"], score_text)
             if score < MIN_SCORE_TO_LOG:
                 continue  # not relevant enough to log at all
 
