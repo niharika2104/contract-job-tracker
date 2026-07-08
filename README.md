@@ -68,7 +68,9 @@ recruiter_email, recruiter_phone, found_at
 Recruiter email/phone only get filled in when the job's own detail page
 actually lists contact info - a lot of postings won't have it, that's normal,
 not a bug. Emails run through a Cloudflare-obfuscation decoder since a few
-sites (Recruut) hide addresses that way.
+sites (Recruut) hide addresses that way. Phone numbers pick up extensions
+too (ext./x/extension, any format) - the dashboard turns those into a proper
+tel:;ext= link and shows "(ext NNN)" on the call button so it's not hidden.
 
 data/jobs_archive_before_recruiter_columns.csv is old data from before the
 job_url/recruiter columns existed, kept around instead of deleted.
