@@ -33,6 +33,14 @@ search only works through JavaScript - nothing to scrape without a headless
 browser. Dice/Indeed/ZipRecruiter can still be searched on demand through
 Claude directly, just not on the automated schedule.
 
+## Dashboard
+
+docs/index.html is a live view of jobs.csv - reads it straight off GitHub
+(raw.githubusercontent.com) client-side, no build step, refetches every 60s.
+Hosted free via GitHub Pages (Settings → Pages → deploy from main /docs).
+Search, filter by source, min-score slider, sort. Recruiter email/phone show
+as clickable buttons right on the card when present.
+
 ## Setup
 
 1. Repo is public (needed for free unlimited GitHub Actions minutes - keep it
@@ -78,6 +86,14 @@ MIN_SCORE_TO_ALERT = 2 (also pings Telegram)
 Postings older than MAX_POSTING_AGE_DAYS (3) get skipped on sites that mix
 old and new listings on the same page (OnlyC2C, Recruut, Robert Half).
 
+SmartRecruiters-based sources (Collabera, Apex, Mastech, Eliassen, ASK,
+Diverse Lynx, Aditi) only show a bare title on the listing page - no
+description, no skills. Scoring on title alone missed roles like "Senior
+Consultant" that were actually GenAI work once you opened the posting. Fixed
+by having those scrapers fetch each job's own detail page for full-text
+scoring, but only for postings not already in seen_ids.json - otherwise
+we'd be re-fetching every open req on every 10-min run for no reason.
+
 ## Adding a new source
 
 If it's on SmartRecruiters (careers.smartrecruiters.com/{slug}), it's one
@@ -92,6 +108,15 @@ a headless browser.
 
 ## Known rough edges
 
+- Robert Half and Motion Recruitment are returning 0 listings as of the last
+  check, despite both having real, confirmed-working listing pages when
+  checked outside of GitHub Actions. Best guess is their sites are blocking
+  requests coming from GitHub's runner IPs specifically (common anti-bot
+  behavior for bigger corporate career sites - cloud/datacenter IP ranges get
+  blocklisted a lot). Added debug logging (status code, byte count, page
+  title, link-match count) to both scrapers so the next run's log output
+  should confirm one way or the other. Check Actions log before assuming
+  either site's HTML changed.
 - OnlyC2C and Motion Recruitment's title fields are the raw scraped text
   (title+location+description all mashed together) rather than cleanly split
   out - there's no reliable delimiter in the HTML to split on, so I gave up
