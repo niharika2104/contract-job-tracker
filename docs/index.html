@@ -1,0 +1,548 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Signal — job radar</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+<style>
+  :root {
+    --bg: #0B0F14;
+    --surface: #131A22;
+    --surface-hover: #182028;
+    --border: #212B36;
+    --text: #E4E9F0;
+    --text-muted: #7C8798;
+    --text-faint: #4B5563;
+    --accent: #4F9DDE;
+    --accent-dim: #2C4A63;
+    --signal-strong: #F2B84B;
+    --signal-mid: #4F9DDE;
+    --signal-weak: #3A4552;
+    --good: #4FAE7C;
+    --radius: 6px;
+    --mono: 'IBM Plex Mono', monospace;
+    --display: 'Space Grotesk', sans-serif;
+    --body: 'Inter', sans-serif;
+  }
+
+  * { box-sizing: border-box; }
+
+  html { color-scheme: dark; }
+
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--body);
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  a { color: inherit; }
+
+  ::selection { background: var(--accent-dim); }
+
+  /* ---------- topbar ---------- */
+  .topbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 16px;
+    padding: 20px 28px;
+    border-bottom: 1px solid var(--border);
+    position: sticky;
+    top: 0;
+    background: rgba(11, 15, 20, 0.92);
+    backdrop-filter: blur(8px);
+    z-index: 10;
+  }
+
+  .brand {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+  }
+
+  .brand .mark {
+    font-family: var(--display);
+    font-weight: 700;
+    font-size: 22px;
+    letter-spacing: 0.02em;
+  }
+
+  .brand .mark .dot {
+    display: inline-block;
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--good);
+    margin-right: 8px;
+    box-shadow: 0 0 0 0 rgba(79, 174, 124, 0.6);
+    animation: pulse 2.4s infinite;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .brand .mark .dot { animation: none; }
+  }
+
+  @keyframes pulse {
+    0%   { box-shadow: 0 0 0 0 rgba(79, 174, 124, 0.55); }
+    70%  { box-shadow: 0 0 0 8px rgba(79, 174, 124, 0); }
+    100% { box-shadow: 0 0 0 0 rgba(79, 174, 124, 0); }
+  }
+
+  .brand .tagline {
+    font-size: 13px;
+    color: var(--text-muted);
+    font-family: var(--mono);
+  }
+
+  .stats {
+    display: flex;
+    gap: 24px;
+    font-family: var(--mono);
+    font-size: 13px;
+  }
+
+  .stats .stat { text-align: right; }
+  .stats .stat .num { font-size: 17px; font-weight: 600; color: var(--text); display: block; }
+  .stats .stat .label { color: var(--text-faint); font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; }
+
+  /* ---------- controls ---------- */
+  .controls {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+    padding: 16px 28px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .search-wrap {
+    position: relative;
+    flex: 1 1 240px;
+    min-width: 200px;
+  }
+
+  .search-wrap svg {
+    position: absolute;
+    left: 12px;
+    top: 50%;
+    transform: translateY(-50%);
+    opacity: 0.5;
+  }
+
+  input[type="text"], select {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    color: var(--text);
+    border-radius: var(--radius);
+    padding: 9px 12px;
+    font-family: var(--body);
+    font-size: 14px;
+    outline: none;
+    transition: border-color 0.15s ease;
+  }
+
+  input[type="text"] { width: 100%; padding-left: 36px; }
+
+  input[type="text"]:focus, select:focus, .chip:focus-visible, button:focus-visible {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px rgba(79, 157, 222, 0.18);
+  }
+
+  .chip-row { display: flex; gap: 8px; flex-wrap: wrap; }
+
+  .chip {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    color: var(--text-muted);
+    border-radius: 999px;
+    padding: 7px 13px;
+    font-size: 12.5px;
+    font-family: var(--mono);
+    cursor: pointer;
+    transition: all 0.15s ease;
+    user-select: none;
+  }
+
+  .chip:hover { border-color: var(--text-faint); color: var(--text); }
+
+  .chip.active {
+    background: var(--accent-dim);
+    border-color: var(--accent);
+    color: var(--text);
+  }
+
+  .slider-wrap {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-family: var(--mono);
+    font-size: 12.5px;
+    color: var(--text-muted);
+  }
+
+  input[type="range"] {
+    accent-color: var(--accent);
+    cursor: pointer;
+  }
+
+  select { cursor: pointer; }
+
+  /* ---------- table ---------- */
+  .table-wrap { padding: 0 28px 60px; }
+
+  table { width: 100%; border-collapse: collapse; margin-top: 4px; }
+
+  thead th {
+    text-align: left;
+    font-family: var(--mono);
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-faint);
+    font-weight: 500;
+    padding: 12px 10px;
+    border-bottom: 1px solid var(--border);
+    cursor: pointer;
+    white-space: nowrap;
+  }
+
+  thead th:hover { color: var(--text-muted); }
+  thead th.sorted { color: var(--accent); }
+
+  tbody tr {
+    border-bottom: 1px solid var(--border);
+    transition: background 0.1s ease;
+  }
+
+  tbody tr:hover { background: var(--surface-hover); }
+
+  tbody td { padding: 14px 10px; font-size: 14px; vertical-align: top; }
+
+  .job-title {
+    font-weight: 500;
+    color: var(--text);
+    text-decoration: none;
+    display: block;
+    max-width: 420px;
+  }
+
+  .job-title:hover { color: var(--accent); }
+
+  .job-sub {
+    font-size: 12.5px;
+    color: var(--text-muted);
+    margin-top: 3px;
+  }
+
+  .source-badge {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--text-muted);
+    background: var(--surface);
+    border: 1px solid var(--border);
+    padding: 3px 8px;
+    border-radius: 4px;
+    white-space: nowrap;
+  }
+
+  .posted-cell {
+    font-family: var(--mono);
+    font-size: 12.5px;
+    color: var(--text-muted);
+    white-space: nowrap;
+  }
+
+  /* signal meter — the signature element */
+  .signal-meter {
+    display: inline-flex;
+    align-items: flex-end;
+    gap: 2px;
+    height: 16px;
+  }
+
+  .signal-meter .bar {
+    width: 4px;
+    border-radius: 1px;
+    background: var(--signal-weak);
+  }
+
+  .signal-meter .bar:nth-child(1) { height: 5px; }
+  .signal-meter .bar:nth-child(2) { height: 8px; }
+  .signal-meter .bar:nth-child(3) { height: 11px; }
+  .signal-meter .bar:nth-child(4) { height: 14px; }
+  .signal-meter .bar:nth-child(5) { height: 17px; }
+
+  .signal-meter.lit-1 .bar:nth-child(1) { background: var(--signal-mid); }
+  .signal-meter.lit-2 .bar:nth-child(-n+2) { background: var(--signal-mid); }
+  .signal-meter.lit-3 .bar:nth-child(-n+3) { background: var(--signal-mid); }
+  .signal-meter.lit-4 .bar:nth-child(-n+4) { background: var(--signal-strong); }
+  .signal-meter.lit-5 .bar:nth-child(-n+5) { background: var(--signal-strong); }
+
+  .score-cell {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-family: var(--mono);
+    font-size: 13px;
+    color: var(--text-muted);
+  }
+
+  .contact-icons {
+    display: flex;
+    gap: 6px;
+    margin-top: 6px;
+  }
+
+  .contact-icons a {
+    font-size: 11px;
+    font-family: var(--mono);
+    color: var(--good);
+    text-decoration: none;
+    border: 1px solid rgba(79, 174, 124, 0.3);
+    padding: 2px 6px;
+    border-radius: 4px;
+  }
+
+  .keywords {
+    font-size: 11.5px;
+    color: var(--text-faint);
+    margin-top: 5px;
+    font-family: var(--mono);
+  }
+
+  /* ---------- states ---------- */
+  .state {
+    padding: 80px 28px;
+    text-align: center;
+    color: var(--text-muted);
+    font-family: var(--mono);
+    font-size: 14px;
+  }
+
+  .state .big { font-family: var(--display); font-size: 20px; color: var(--text); margin-bottom: 8px; font-weight: 600; }
+
+  @media (max-width: 720px) {
+    .topbar { padding: 16px; }
+    .stats { display: none; }
+    .controls { padding: 12px 16px; }
+    .table-wrap { padding: 0 8px 40px; overflow-x: auto; }
+    table { min-width: 640px; }
+  }
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="brand">
+    <div class="mark"><span class="dot"></span>SIGNAL</div>
+    <div class="tagline">c2c · genai · ml job radar</div>
+  </div>
+  <div class="stats">
+    <div class="stat"><span class="num" id="stat-total">—</span><span class="label">tracked</span></div>
+    <div class="stat"><span class="num" id="stat-today">—</span><span class="label">today</span></div>
+    <div class="stat"><span class="num" id="stat-sources">—</span><span class="label">sources</span></div>
+    <div class="stat"><span class="num" id="stat-synced">—</span><span class="label">synced</span></div>
+  </div>
+</div>
+
+<div class="controls">
+  <div class="search-wrap">
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+    <input type="text" id="search" placeholder="search title, keyword, location…">
+  </div>
+  <div class="chip-row" id="source-chips"></div>
+  <div class="slider-wrap">
+    min score <input type="range" id="score-slider" min="0" max="10" step="0.5" value="0"><span id="score-val">0</span>
+  </div>
+  <select id="sort-select">
+    <option value="found_at-desc">newest first</option>
+    <option value="score-desc">highest score</option>
+    <option value="posted-desc">recently posted</option>
+  </select>
+</div>
+
+<div class="table-wrap" id="table-wrap">
+  <div class="state" id="loading-state"><div class="big">scanning…</div>reading jobs.csv from the repo</div>
+</div>
+
+<script>
+const CSV_URL = "https://raw.githubusercontent.com/niharika2104/contract-job-tracker/main/data/jobs.csv";
+const REFRESH_MS = 60000;
+
+let allJobs = [];
+let activeSources = new Set();
+let sortKey = "found_at";
+let sortDir = "desc";
+
+function timeAgo(iso) {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (isNaN(d)) return iso;
+  const diffMs = Date.now() - d.getTime();
+  const mins = Math.floor(diffMs / 60000);
+  if (mins < 1) return "just now";
+  if (mins < 60) return mins + "m ago";
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return hrs + "h ago";
+  const days = Math.floor(hrs / 24);
+  return days + "d ago";
+}
+
+function signalTier(score) {
+  const s = parseFloat(score) || 0;
+  if (s >= 8) return 5;
+  if (s >= 6) return 4;
+  if (s >= 4) return 3;
+  if (s >= 2) return 2;
+  if (s > 0) return 1;
+  return 0;
+}
+
+function renderSignalMeter(score) {
+  const tier = signalTier(score);
+  return `<div class="signal-meter lit-${tier}">
+    <div class="bar"></div><div class="bar"></div><div class="bar"></div><div class="bar"></div><div class="bar"></div>
+  </div>`;
+}
+
+function escapeHtml(str) {
+  const div = document.createElement('div');
+  div.textContent = str || "";
+  return div.innerHTML;
+}
+
+function buildSourceChips(jobs) {
+  const sources = [...new Set(jobs.map(j => j.source))].sort();
+  const wrap = document.getElementById('source-chips');
+  wrap.innerHTML = "";
+  sources.forEach(src => {
+    const chip = document.createElement('button');
+    chip.className = 'chip active';
+    chip.textContent = src;
+    chip.dataset.source = src;
+    chip.onclick = () => {
+      if (activeSources.has(src)) { activeSources.delete(src); chip.classList.remove('active'); }
+      else { activeSources.add(src); chip.classList.add('active'); }
+      render();
+    };
+    wrap.appendChild(chip);
+    activeSources.add(src);
+  });
+}
+
+function updateStats(jobs) {
+  document.getElementById('stat-total').textContent = jobs.length;
+  const today = new Date().toISOString().slice(0, 10);
+  const todayCount = jobs.filter(j => (j.found_at || "").slice(0, 10) === today).length;
+  document.getElementById('stat-today').textContent = todayCount;
+  document.getElementById('stat-sources').textContent = new Set(jobs.map(j => j.source)).size;
+  document.getElementById('stat-synced').textContent = "now";
+}
+
+function render() {
+  const query = document.getElementById('search').value.toLowerCase();
+  const minScore = parseFloat(document.getElementById('score-slider').value);
+
+  let filtered = allJobs.filter(j => {
+    if (!activeSources.has(j.source)) return false;
+    if ((parseFloat(j.score) || 0) < minScore) return false;
+    if (query) {
+      const hay = (j.title + " " + j.matched_keywords + " " + j.company_or_location).toLowerCase();
+      if (!hay.includes(query)) return false;
+    }
+    return true;
+  });
+
+  filtered.sort((a, b) => {
+    let av = a[sortKey], bv = b[sortKey];
+    if (sortKey === "score") { av = parseFloat(av) || 0; bv = parseFloat(bv) || 0; }
+    else { av = av || ""; bv = bv || ""; }
+    if (av < bv) return sortDir === "asc" ? -1 : 1;
+    if (av > bv) return sortDir === "asc" ? 1 : -1;
+    return 0;
+  });
+
+  const wrap = document.getElementById('table-wrap');
+
+  if (filtered.length === 0) {
+    wrap.innerHTML = `<div class="state"><div class="big">no signal</div>nothing matches these filters — widen the search or lower the score threshold</div>`;
+    return;
+  }
+
+  let rows = filtered.map(j => {
+    const contacts = [];
+    if (j.recruiter_email) contacts.push(`<a href="mailto:${escapeHtml(j.recruiter_email)}">✉ email</a>`);
+    if (j.recruiter_phone) contacts.push(`<a href="tel:${escapeHtml(j.recruiter_phone.split(';')[0].trim())}">☎ call</a>`);
+    return `
+    <tr>
+      <td>
+        <a class="job-title" href="${escapeHtml(j.job_url)}" target="_blank" rel="noopener">${escapeHtml(j.title).slice(0, 140)}</a>
+        <div class="job-sub">${escapeHtml(j.company_or_location || "")}</div>
+        ${j.matched_keywords ? `<div class="keywords">${escapeHtml(j.matched_keywords)}</div>` : ""}
+        ${contacts.length ? `<div class="contact-icons">${contacts.join("")}</div>` : ""}
+      </td>
+      <td><span class="source-badge">${escapeHtml(j.source)}</span></td>
+      <td class="score-cell">${renderSignalMeter(j.score)} ${j.score}</td>
+      <td class="posted-cell">${escapeHtml(j.posted) || timeAgo(j.found_at)}</td>
+      <td class="posted-cell">${timeAgo(j.found_at)}</td>
+    </tr>`;
+  }).join("");
+
+  wrap.innerHTML = `
+    <table>
+      <thead>
+        <tr>
+          <th>role</th>
+          <th>source</th>
+          <th>signal</th>
+          <th>posted</th>
+          <th>found</th>
+        </tr>
+      </thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+}
+
+function loadData() {
+  Papa.parse(CSV_URL + "?t=" + Date.now(), {
+    download: true,
+    header: true,
+    skipEmptyLines: true,
+    complete: function(results) {
+      allJobs = results.data.filter(j => j.title);
+      if (activeSources.size === 0) buildSourceChips(allJobs);
+      updateStats(allJobs);
+      render();
+    },
+    error: function(err) {
+      document.getElementById('table-wrap').innerHTML =
+        `<div class="state"><div class="big">couldn't reach jobs.csv</div>check the repo is public and the path is right — ${err}</div>`;
+    }
+  });
+}
+
+document.getElementById('search').addEventListener('input', render);
+document.getElementById('score-slider').addEventListener('input', (e) => {
+  document.getElementById('score-val').textContent = e.target.value;
+  render();
+});
+document.getElementById('sort-select').addEventListener('change', (e) => {
+  const [key, dir] = e.target.value.split('-');
+  sortKey = key; sortDir = dir;
+  render();
+});
+
+loadData();
+setInterval(loadData, REFRESH_MS);
+</script>
+
+</body>
+</html>
