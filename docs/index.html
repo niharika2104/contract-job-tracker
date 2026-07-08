@@ -480,7 +480,20 @@ function render() {
   let rows = filtered.map(j => {
     const contacts = [];
     if (j.recruiter_email) contacts.push(`<a href="mailto:${escapeHtml(j.recruiter_email)}">✉ email</a>`);
-    if (j.recruiter_phone) contacts.push(`<a href="tel:${escapeHtml(j.recruiter_phone.split(';')[0].trim())}">☎ call</a>`);
+    if (j.recruiter_phone) {
+      const raw = j.recruiter_phone.split(';')[0].trim();
+      const extMatch = raw.match(/(.*?)\s*(?:ext\.?|extension|x)\s*(\d{1,6})\s*$/i);
+      let telHref, label;
+      if (extMatch) {
+        const base = extMatch[1].replace(/[^\d+]/g, '');
+        telHref = `tel:${base};ext=${extMatch[2]}`;
+        label = `☎ call (ext ${extMatch[2]})`;
+      } else {
+        telHref = `tel:${raw.replace(/[^\d+]/g, '')}`;
+        label = `☎ call`;
+      }
+      contacts.push(`<a href="${telHref}">${label}</a>`);
+    }
     return `
     <tr>
       <td>
