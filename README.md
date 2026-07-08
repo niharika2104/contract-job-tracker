@@ -94,6 +94,14 @@ by having those scrapers fetch each job's own detail page for full-text
 scoring, but only for postings not already in seen_ids.json - otherwise
 we'd be re-fetching every open req on every 10-min run for no reason.
 
+Hotlist posts (recruiters advertising their own bench consultants, not an
+actual open requirement - e.g. "Hot-List of my consultants || ... || AI
+Engineer") get excluded entirely before scoring, via EXCLUDE_REGEX in
+scraper.py. Was seeing these show up as false positives since the bench
+skill list would trip a high-weight keyword like "AI Engineer" despite it
+not being a real req. Add more patterns there if other flavors of this show
+up.
+
 ## Adding a new source
 
 If it's on SmartRecruiters (careers.smartrecruiters.com/{slug}), it's one
