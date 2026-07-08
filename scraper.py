@@ -124,9 +124,13 @@ def score_job(title, extra_text=""):
 EMAIL_PATTERN = re.compile(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}")
 
 # Matches common US phone formats: (123) 456-7890, 123-456-7890,
-# 123.456.7890, +1 123 456 7890, etc.
+# 123.456.7890, +1 123 456 7890, etc. — plus an optional extension suffix
+# like "x123", "ext. 456", "extension 789", since recruiter numbers on some
+# boards include a direct-line extension that's easy to miss otherwise.
 PHONE_PATTERN = re.compile(
     r"(?:\+?1[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}"
+    r"(?:\s*(?:ext\.?|extension|x)\s*\d{1,6})?",
+    re.IGNORECASE,
 )
 
 # Emails on these domains belong to the portal itself (support/contact
