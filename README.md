@@ -1,80 +1,104 @@
-# C2C Job Tracker — GenAI / ML / Data Science
+# C2C Job Tracker
 
-Scrapes C2C/contract job portals every ~10 minutes, scores each new posting
-against your resume keywords, logs matches to `data/jobs.csv`, and sends you
-a Telegram message the moment a relevant job appears.
+Checks a bunch of job portals every 10 minutes for data science / ML / GenAI
+contract roles, scores them against my resume keywords, and pings me on
+Telegram when something good shows up. Everything also gets logged to
+data/jobs.csv.
 
-**Currently covers:** Nvoids, OnlyC2C
-**Cost:** $0/month (GitHub Actions free tier + free Telegram bot)
+Runs on GitHub Actions, triggered by cron-job.org. Free.
 
-## One-time setup (10 minutes)
+## Sources currently monitored
 
-1. **Create a GitHub account** if you don't have one (free): https://github.com/signup
+C2C boards:
+- Nvoids
+- OnlyC2C
+- Recruut
+- TechFetch (corp-to-corp page)
+- BenchZero
 
-2. **Create a new repository**
-   - Click "+" → "New repository"
-   - Name it anything, e.g. `c2c-job-tracker`
-   - Set it to **Private** (keeps your job search private)
-   - Click "Create repository"
+Prime vendors:
+- Collabera
+- Apex Systems
+- Robert Half
+- Motion Recruitment
+- Mastech Digital
+- Eliassen Group
+- ASK Staffing
+- Diverse Lynx
+- Aditi Consulting
 
-3. **Upload these files** to the repo
-   - Easiest way: on the repo page, click "Add file" → "Upload files", then drag
-     in everything from this folder (keep the folder structure — the
-     `.github/workflows/job_scraper.yml` path matters)
+A bunch of others (Kforce, TEKsystems, Randstad, Insight Global, Judge Group,
+Dice, Monster, Genesis10, etc.) were checked and skipped because their job
+search only works through JavaScript - nothing to scrape without a headless
+browser. Dice/Indeed/ZipRecruiter can still be searched on demand through
+Claude directly, just not on the automated schedule.
 
-4. **Create your Telegram bot** (if you haven't already)
-   - Message **@BotFather** on Telegram → `/newbot` → follow the prompts
-   - Save the **bot token** it gives you
-   - Send your new bot any message (e.g. "hi") so it's allowed to reply to you
-   - Visit `https://api.telegram.org/bot<YOUR_TOKEN>/getUpdates` in a browser
-     to find your **chat ID** (the number in `"chat":{"id":...}`)
+## Setup
 
-5. **Add your bot token + chat ID as GitHub Secrets**
-   - In your repo: Settings → Secrets and variables → Actions → "New repository secret"
-   - Add `TELEGRAM_BOT_TOKEN` = your bot token
-   - Add `TELEGRAM_CHAT_ID` = your chat ID
+1. Repo is public (needed for free unlimited GitHub Actions minutes - keep it
+   private only if you don't mind paying ~$13-14/mo in Actions usage at this
+   frequency).
 
-6. **Turn on Actions** (if prompted)
-   - Go to the "Actions" tab in your repo, click "I understand my workflows, go ahead and enable them"
+2. Secrets needed in Settings → Secrets and variables → Actions:
+   - `TELEGRAM_BOT_TOKEN`
+   - `TELEGRAM_CHAT_ID`
 
-7. **Test it manually** before waiting for the schedule
-   - Actions tab → "C2C Job Scraper" (left sidebar) → "Run workflow" → Run workflow
-   - Check the run logs, and check `data/jobs.csv` in the repo afterward
-   - You should also get a Telegram message if any relevant job was found
+3. Triggering: GitHub's own cron scheduler turned out to be unreliable (would
+   just stop firing for no clear reason). Working setup now is cron-job.org
+   hitting the workflow_dispatch API endpoint every 10 min, using Basic Auth
+   (username = github username, password = a fine-grained PAT with Actions
+   read/write on this repo only). If cron-job.org executions start failing,
+   check that the PAT hasn't expired.
 
-That's it — after this, it runs automatically every ~10 minutes, forever,
-for free.
+4. To test manually: Actions tab → C2C Job Scraper → Run workflow.
 
-## How matching works
+## jobs.csv columns
 
-`scraper.py` has a `KEYWORDS` dict with weighted terms pulled from your
-resume (GenAI, LangGraph, RAG, Bedrock, SageMaker, MLOps, Data Scientist,
-etc.). Every new posting gets scored; postings scoring ≥1 go into the CSV,
-postings scoring ≥2 also trigger a Telegram alert. Tune the weights or
-`MIN_SCORE_TO_LOG` / `MIN_SCORE_TO_ALERT` in `scraper.py` any time.
+source, title, company_or_location, job_url, posted, score, matched_keywords,
+recruiter_email, recruiter_phone, found_at
 
-## Adding more portals
+Recruiter email/phone only get filled in when the job's own detail page
+actually lists contact info - a lot of postings won't have it, that's normal,
+not a bug. Emails run through a Cloudflare-obfuscation decoder since a few
+sites (Recruut) hide addresses that way.
 
-Each site needs its own small scraper function in `scraper.py` (see
-`scrape_nvoids` for a clean example, `scrape_onlyc2c` for a heuristic
-example). Send me the portal name and I'll write and test the next one —
-we're doing this incrementally since each site's HTML structure is different.
+data/jobs_archive_before_recruiter_columns.csv is old data from before the
+job_url/recruiter columns existed, kept around instead of deleted.
 
-## Known limitations / honesty notes
+## Scoring
 
-- **OnlyC2C's parser is a best-effort heuristic**, not verified against live
-  HTML (its listings are card-based, not a clean table like Nvoids). If it
-  returns 0 results or garbled titles on the first real run, check the
-  Action's log output and share it back — it's a quick fix.
-- **GitHub's cron scheduling is "best effort," not exact** — under high load
-  across GitHub's infrastructure, a `*/10` cron job can occasionally run late
-  by a few minutes. This is still effectively "near real-time" for job
-  alerts, just not to-the-second.
-- **If a portal starts blocking requests** (some sites tighten anti-bot
-  measures after being scraped repeatedly), the fix usually requires either
-  slowing down the polling interval or routing through a proxy service —
-  let me know if a run starts failing and we'll adjust.
-- This scrapes each site respectfully (low frequency, standard headers, no
-  login bypass). Most job boards' Terms of Service technically prohibit
-  automated access even at this pace — worth being aware of, even though
-  personal-use job-search scraping at this volume is low-risk in practice.
+Keyword weights live in the KEYWORDS dict in scraper.py, pulled from my
+resume (GenAI, LangGraph, RAG, Bedrock, SageMaker, MLOps, Databricks, etc).
+Matching is word-boundary based, not plain substring - learned this the hard
+way after "rag" was matching inside "storage" and "snapdragon."
+
+MIN_SCORE_TO_LOG = 1 (goes in the CSV)
+MIN_SCORE_TO_ALERT = 2 (also pings Telegram)
+
+Postings older than MAX_POSTING_AGE_DAYS (3) get skipped on sites that mix
+old and new listings on the same page (OnlyC2C, Recruut, Robert Half).
+
+## Adding a new source
+
+If it's on SmartRecruiters (careers.smartrecruiters.com/{slug}), it's one
+line using make_smartrecruiters_scraper() - already covers half the prime
+vendors added so far since it's such a common platform for staffing firms.
+
+Anything else needs its own scrape_xxx() function. Check first whether the
+job search actually renders without JavaScript (view page source, see if the
+listings are there) before spending time on it - most big staffing firms
+(Workday/Taleo/Phenom-based sites) don't and aren't worth the effort without
+a headless browser.
+
+## Known rough edges
+
+- OnlyC2C and Motion Recruitment's title fields are the raw scraped text
+  (title+location+description all mashed together) rather than cleanly split
+  out - there's no reliable delimiter in the HTML to split on, so I gave up
+  trying to parse it prettier and just left it as-is. Still scores/matches
+  fine, just not pretty in the CSV.
+- Robert Half only pulls from a fixed list of category pages (data-scientist,
+  data-engineer, etc.) rather than a full search - if a role doesn't fall
+  into one of those categories it won't show up.
+- Mastech Digital had zero open postings when added - scraper's still there
+  and will pick jobs up automatically whenever they post something.
