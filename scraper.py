@@ -67,6 +67,21 @@ KEYWORDS = {
     "c2c": 0, "corp-to-corp": 0, "corp to corp": 0,
 }
 
+# Postings matching any of these aren't real job requirements — they're
+# recruiters/bench-sales reps marketing their own available consultants for
+# other companies to hire, a common pattern on C2C boards. Excluded outright
+# regardless of keyword score, since e.g. "Hot-List || ... || AI Engineer"
+# would otherwise score high on "ai engineer" despite not being a real req.
+EXCLUDE_PATTERNS = [
+    r"hot[\s\-]?list",
+    r"\bmy consultants\b",
+    r"\bour consultants\b",
+    r"\bbench consultants\b",
+    r"\bavailable consultants\b",
+    r"\bconsultants available\b",
+]
+EXCLUDE_REGEX = re.compile("|".join(EXCLUDE_PATTERNS), re.IGNORECASE)
+
 
 # ---------------------------------------------------------------------------
 # HELPERS
@@ -86,6 +101,13 @@ def save_seen(seen_ids):
 
 def score_job(title, extra_text=""):
     text = (title + " " + extra_text).lower()
+
+    # Hotlist / consultant-marketing posts aren't real requirements — bail
+    # out before keyword scoring so they never sneak in on a high-weight
+    # match like "AI Engineer" appearing in someone's list of bench skills.
+    if EXCLUDE_REGEX.search(text):
+        return 0, []
+
     score = 0
     matched = []
     for kw, weight in KEYWORDS.items():
